@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Popcorn Drop - Octo Munch!</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a1628;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Segoe UI', sans-serif;
+    color: #fff;
+  }
+  h1 {
+    font-size: 2rem;
+    margin-bottom: 6px;
+    background: linear-gradient(135deg, #ffd94a, #ff8c2a);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 2px;
+  }
+  .subtitle { color: #2ad4c0; font-size: 0.85rem; margin-bottom: 14px; }
+  .game-area { display: flex; gap: 20px; align-items: flex-start; }
+  #game-canvas {
+    border: 2px solid #2ad4c0;
+    border-radius: 8px;
+    box-shadow: 0 0 30px rgba(42,212,192,0.2);
+    display: block;
+  }
+  .side-panel {
+    background: #112240;
+    border: 1px solid #2ad4c0;
+    border-radius: 12px;
+    padding: 16px;
+    width: 140px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .panel-label { font-size: 0.7rem; color: #2ad4c0; text-transform: uppercase; letter-spacing: 2px; }
+  .panel-value { font-size: 1.8rem; font-weight: bold; color: #ffd94a; }
+  #next-canvas { border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); display: block; }
+  .controls { font-size: 0.72rem; color: rgba(255,255,255,0.45); line-height: 2; }
+  .controls span { color: #ff8c2a; font-weight: bold; }
+  #start-btn {
+    background: linear-gradient(135deg, #ffd94a, #ff8c2a);
+    color: #0a1628;
+    border: none;
+    border-radius: 8px;
+    padding: 10px;
+    font-weight: bold;
+    font-size: 0.9rem;
+    cursor: pointer;
+    width: 100%;
+  }
+  #start-btn:hover { opacity: 0.85; }
+</style>
+</head>
+<body>
+<h1>🍿 POPCORN DROP 🐙</h1>
+<p class="subtitle">Otto is hungry — he'll chase the popcorn!</p>
+
+<div class="game-area">
+  <div class="side-panel">
+    <div>
+      <div class="panel-label">Score</div>
+      <div class="panel-value" id="score-display">0</div>
+    </div>
+    <div>
+      <div class="panel-label">Level</div>
+      <div class="panel-value" id="level-display">1</div>
+    </div>
+    <div>
+      <div class="panel-label">Missed</div>
+      <div class="panel-value" id="missed-display">0</div>
+    </div>
+    <div>
+      <div class="panel-label">Next</div>
+      <canvas id="next-canvas" width="100" height="80"></canvas>
+    </div>
+    <button id="start-btn">▶ Start</button>
+    <div class="controls">
+      <span>← →</span> Guide Otto<br>
+      <span>↓</span> Drop faster<br>
+      <span>↑</span> Rotate<br>
+      <span>Space</span> Hard drop
+    </div>
+  </div>
+
+  <canvas id="game-canvas" width="320" height="580"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+const nextCanvas = document.getElementById('next-canvas');
+const nctx = nextCanvas.getContext('2d');
+
+const W = canvas.width, H = canvas.height;
+const COLS = 10, ROWS = 18, SZ = 30;
+const BOARD_LEFT = (W - COLS * SZ) / 2;
+const BOARD_TOP = 30;
+const OTTO_Y = H - 72;
+const CATCH_Y = OTTO_Y - 36;
+
+const SHAPES = [
+  [[1,1,1,1]],
+  [[1,1],[1,1]],
+  [[0,1,0],[1,1,1]],
+  [[0,1,1],[1,1,0]],
+  [[1,1,0],[0,1,1]],
+  [[1,0,0],[1,1,1]],
+  [[0,0,1],[1,1,1]],
+];
+const PCOLS = ['#ffd94a','#ffb830','#ff9f1a','#ffe08a','#ffc14d','#ffcc44','#fff0a0'];
+
+let board, fallingPiece, nextPiece, score, level, missed, running, gameLoopId;
+let otto = { x: W/2, targetX: W/2, munch: 0, phase: 0, lunge: 0 };
+let particles = [];
+let lastDrop = 0;
+
+// ─── Draw a single fluffy popcorn kernel ─────────────────────
+function drawKernel(cx, x, y, r, color) {
+  cx.save();
+  cx.translate(x, y);
+  cx.fillStyle = color;
+  // Center puff
+  cx.beginPath(); cx.arc(0, 0, r, 0, Math.PI*2); cx.fill();
+  // Lobes
+  cx.beginPath(); cx.arc(-r*0.55, -r*0.28, r*0.52, 0, Math.PI*2); cx.fill();
+  cx.beginPath(); cx.arc( r*0.55, -r*0.28, r*0.52, 0, Math.PI*2); cx.fill();
+  cx.beginPath(); cx.arc(0, -r*0.68, r*0.48, 0, Math.PI*2); cx.fill();
+  cx.beginPath(); cx.arc(-r*0.58,  r*0.22, r*0.42, 0, Math.PI*2); cx.fill();
+  cx.beginPath(); cx.arc( r*0.58,  r*0.22, r*0.42, 0, Math.PI*2); cx.fill();
+  // Highlights
+  cx.fillStyle = 'rgba(255,255,255,0.48)';
+  cx.beginPath(); cx.arc(-r*0.22, -r*0.32, r*0.26, 0, Math.PI*2); cx.fill();
+  cx.fillStyle = 'rgba(255,255,255,0.22)';
+  cx.beginPath(); cx.arc( r*0.3,  -r*0.52, r*0.16, 0, Math.PI*2); cx.fill();
+  // Kernel nub
+  cx.fillStyle = '#b06000';
+  cx.beginPath(); cx.ellipse(0, r*0.62, r*0.2, r*0.16, 0, 0, Math.PI*2); cx.fill();
+  cx.restore();
+}
+
+// ─── Draw Otto ───────────────────────────────────────────────
+function drawOtto(x, y, munch, phase) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  const bw = 42, bh = 34;
+  const mouthOpen = munch > 0 ? Math.min(1, munch / 10) : 0;
+
+  // 8 tentacles
+  const tentDefs = [
+    { ox: -bw*0.95, lean: -20 }, { ox: -bw*0.65, lean: -10 },
+    { ox: -bw*0.30, lean:  -3 }, { ox: -bw*0.05, lean:   5 },
+    { ox:  bw*0.05, lean:  -5 }, { ox:  bw*0.30, lean:   3 },
+    { ox:  bw*0.65, lean:  10 }, { ox:  bw*0.95, lean:  20 },
+  ];
+
+  tentDefs.forEach((t, i) => {
+    const wave  = Math.sin(phase + i * 0.8) * 12;
+    const wave2 = Math.sin(phase * 1.2 + i * 0.55) * 7;
+    const len = 55 + Math.abs(Math.sin(phase * 0.5 + i)) * 8;
+
+    const x0 = t.ox, y0 = bh * 0.35;
+    const cpx = t.ox + t.lean + wave;
+    const cpy = y0 + len * 0.5;
+    const x1  = t.ox + t.lean * 1.6 + wave2;
+    const y1  = y0 + len;
+
+    // Shadow/depth
+    ctx.strokeStyle = '#5b21b6';
+    ctx.lineWidth = 8 - (i % 3) * 0.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.quadraticCurveTo(cpx, cpy, x1, y1);
+    ctx.stroke();
+
+    // Main tentacle
+    ctx.strokeStyle = '#7c3aed';
+    ctx.lineWidth = 6 - (i % 3) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.quadraticCurveTo(cpx, cpy, x1, y1);
+    ctx.stroke();
+
+    // Suction cups along the curve
+    for (let s = 0.25; s <= 1.0; s += 0.22) {
+      const t2 = s;
+      const sx = (1-t2)*(1-t2)*x0 + 2*(1-t2)*t2*cpx + t2*t2*x1;
+      const sy = (1-t2)*(1-t2)*y0 + 2*(1-t2)*t2*cpy + t2*t2*y1;
+      ctx.fillStyle = '#a78bfa';
+      ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#ede9fe';
+      ctx.beginPath(); ctx.arc(sx, sy, 1.2, 0, Math.PI*2); ctx.fill();
+    }
+  });
+
+  // Body
+  ctx.fillStyle = '#7c3aed';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, bw, bh, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Body sheen
+  ctx.fillStyle = 'rgba(167,139,250,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(-bw*0.22, -bh*0.28, bw*0.38, bh*0.22, -0.3, 0, Math.PI*2);
+  ctx.fill();
+
+  // Eyes
+  [-1, 1].forEach(side => {
+    const ex = side * bw * 0.37, ey = -bh * 0.14;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.ellipse(ex, ey, 11, 12, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1e3a8a';
+    ctx.beginPath(); ctx.ellipse(ex, ey+1, 7, 8, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(ex, ey+1, 4, 5, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(ex+2, ey-2, 2.2, 0, Math.PI*2); ctx.fill();
+  });
+
+  // Mouth
+  if (mouthOpen > 0.05) {
+    const mh = 16 * mouthOpen;
+    const mw = 18 + mouthOpen * 4;
+    // Inner mouth
+    ctx.fillStyle = '#2e1065';
+    ctx.beginPath();
+    ctx.ellipse(0, bh * 0.38, mw, mh, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Lip
+    ctx.strokeStyle = '#6d28d9';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Teeth
+    ctx.fillStyle = '#f5f3ff';
+    for (let t = -2; t <= 2; t++) {
+      const tx = t * 6;
+      ctx.beginPath();
+      ctx.moveTo(tx - 2.5, bh*0.38 - mh*0.6);
+      ctx.lineTo(tx,       bh*0.38 - mh*0.6 + 6);
+      ctx.lineTo(tx + 2.5, bh*0.38 - mh*0.6);
+      ctx.fill();
+    }
+    // Glow
+    ctx.fillStyle = `rgba(253,224,71,${mouthOpen * 0.3})`;
+    ctx.beginPath();
+    ctx.ellipse(0, bh*0.38, mw + 10, mh + 8, 0, 0, Math.PI*2);
+    ctx.fill();
+  } else {
+    // Smile
+    ctx.strokeStyle = '#4c1d95';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(0, bh * 0.28, 11, 0.1*Math.PI, 0.9*Math.PI);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// ─── Game state ───────────────────────────────────────────────
+function newBoard() {
+  return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+}
+
+function randomPiece() {
+  const idx = Math.floor(Math.random() * SHAPES.length);
+  const shape = SHAPES[idx];
+  return {
+    shape,
+    color: PCOLS[Math.floor(Math.random() * PCOLS.length)],
+    x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2),
+    y: -1,
+  };
+}
+
+function rotate(shape) {
+  return shape[0].map((_, i) => shape.map(row => row[i]).reverse());
+}
+
+function isValid(b, p, ox=0, oy=0, shape=null) {
+  const s = shape || p.shape;
+  for (let r = 0; r < s.length; r++) {
+    for (let c = 0; c < s[r].length; c++) {
+      if (!s[r][c]) continue;
+      const nx = p.x + c + ox, ny = p.y + r + oy;
+      if (nx < 0 || nx >= COLS || ny >= ROWS) return false;
+      if (ny >= 0 && b[ny][nx]) return false;
+    }
+  }
+  return true;
+}
+
+function placePiece() {
+  fallingPiece.shape.forEach((row, r) => row.forEach((v, c) => {
+    if (v && fallingPiece.y + r >= 0)
+      board[fallingPiece.y + r][fallingPiece.x + c] = fallingPiece.color;
+  }));
+}
+
+function clearLines() {
+  let cleared = 0;
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (board[r].every(c => c !== null)) {
+      board.splice(r, 1);
+      board.unshift(Array(COLS).fill(null));
+      cleared++; r++;
+    }
+  }
+  return cleared;
+}
+
+function pieceBottomCenterX() {
+  let maxR = 0;
+  fallingPiece.shape.forEach((row, r) => row.forEach((v) => { if (v) maxR = Math.max(maxR, r); }));
+  let sum = 0, cnt = 0;
+  fallingPiece.shape[maxR].forEach((v, c) => { if (v) { sum += c; cnt++; } });
+  return BOARD_LEFT + (fallingPiece.x + sum/cnt + 0.5) * SZ;
+}
+
+function checkCatch() {
+  // Check if any cell of the piece is inside otto's mouth zone
+  const mouthW = 26;
+  let caught = false;
+  fallingPiece.shape.forEach((row, r) => row.forEach((v, c) => {
+    if (!v) return;
+    const px = BOARD_LEFT + (fallingPiece.x + c) * SZ + SZ/2;
+    const py = BOARD_TOP + (fallingPiece.y + r) * SZ + SZ/2;
+    if (py >= CATCH_Y - 10 && py <= CATCH_Y + 22 &&
+        px >= otto.x - mouthW && px <= otto.x + mouthW) {
+      caught = true;
+    }
+  }));
+  return caught;
+}
+
+function spawnParticles(x, y, color) {
+  for (let i = 0; i < 14; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd = 2 + Math.random() * 5;
+    particles.push({ x, y, vx: Math.cos(angle)*spd, vy: Math.sin(angle)*spd - 3,
+      color, life: 1, r: 4 + Math.random()*5 });
+  }
+}
+
+// ─── Render ───────────────────────────────────────────────────
+function renderAll() {
+  ctx.clearRect(0, 0, W, H);
+
+  // BG
+  ctx.fillStyle = '#0a1628';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(42,212,192,0.07)';
+  ctx.lineWidth = 0.5;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      ctx.strokeRect(BOARD_LEFT + c*SZ, BOARD_TOP + r*SZ, SZ, SZ);
+
+  ctx.strokeStyle = 'rgba(42,212,192,0.18)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(BOARD_LEFT, BOARD_TOP, COLS*SZ, ROWS*SZ);
+
+  // Stacked popcorn
+  board.forEach((row, r) => row.forEach((color, c) => {
+    if (color) drawKernel(ctx,
+      BOARD_LEFT + c*SZ + SZ/2,
+      BOARD_TOP + r*SZ + SZ/2,
+      SZ * 0.37, color);
+  }));
+
+  // Ghost
+  if (fallingPiece && running) {
+    let gy = 0;
+    while (isValid(board, fallingPiece, 0, gy+1)) gy++;
+    if (gy > 0) {
+      ctx.globalAlpha = 0.15;
+      fallingPiece.shape.forEach((row, r) => row.forEach((v, c) => {
+        if (v) drawKernel(ctx,
+          BOARD_LEFT + (fallingPiece.x+c)*SZ + SZ/2,
+          BOARD_TOP + (fallingPiece.y+r+gy)*SZ + SZ/2,
+          SZ*0.37, fallingPiece.color);
+      }));
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Falling piece
+  if (fallingPiece) {
+    fallingPiece.shape.forEach((row, r) => row.forEach((v, c) => {
+      if (v && fallingPiece.y + r >= 0)
+        drawKernel(ctx,
+          BOARD_LEFT + (fallingPiece.x+c)*SZ + SZ/2,
+          BOARD_TOP + (fallingPiece.y+r)*SZ + SZ/2,
+          SZ*0.37, fallingPiece.color);
+    }));
+  }
+
+  // Particles
+  particles = particles.filter(p => p.life > 0);
+  particles.forEach(p => {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.18; p.life -= 0.03;
+    ctx.globalAlpha = p.life;
+    drawKernel(ctx, p.x, p.y, p.r, p.color);
+    ctx.globalAlpha = 1;
+  });
+
+  // Otto
+  otto.phase += 0.05;
+  if (otto.munch > 0) otto.munch--;
+  const dx = otto.targetX - otto.x;
+  otto.x += dx * 0.14;
+
+  drawOtto(otto.x, OTTO_Y, otto.munch, otto.phase);
+}
+
+function drawNextPreview() {
+  nctx.clearRect(0, 0, 100, 80);
+  if (!nextPiece) return;
+  const ns = 18;
+  const offX = Math.floor((5 - nextPiece.shape[0].length) / 2);
+  const offY = Math.floor((3 - nextPiece.shape.length) / 2);
+  nextPiece.shape.forEach((row, r) => row.forEach((v, c) => {
+    if (v) drawKernel(nctx,
+      (offX+c)*ns + ns/2 + 8,
+      (offY+r)*ns + ns/2 + 14,
+      ns*0.42, nextPiece.color);
+  }));
+}
+
+// ─── Main loop ────────────────────────────────────────────────
+function gameStep(ts) {
+  if (!running) return;
+  const speed = Math.max(100, 680 - (level - 1) * 55);
+
+  if (ts - lastDrop > speed) {
+    lastDrop = ts;
+
+    if (isValid(board, fallingPiece, 0, 1)) {
+      fallingPiece.y++;
+      // Otto AI: track the piece
+      if (fallingPiece) {
+        const target = pieceBottomCenterX();
+        otto.targetX = Math.max(30, Math.min(W - 30, target));
+      }
+    } else {
+      // Piece can't fall further — did otto catch it?
+      const caught = checkCatch();
+
+      if (caught) {
+        otto.munch = 22;
+        score += 80 * level;
+        spawnParticles(otto.x, OTTO_Y - 40, fallingPiece.color);
+      } else {
+        placePiece();
+        const cleared = clearLines();
+        if (cleared) {
+          score += [0,100,300,500,800][Math.min(cleared,4)] * level;
+        } else {
+          missed++;
+          document.getElementById('missed-display').textContent = missed;
+          if (missed >= 10) { endGame(); return; }
+        }
+      }
+
+      document.getElementById('score-display').textContent = score;
+      level = Math.max(1, Math.floor(score / 800) + 1);
+      document.getElementById('level-display').textContent = level;
+
+      fallingPiece = nextPiece;
+      nextPiece = randomPiece();
+      drawNextPreview();
+
+      if (!isValid(board, fallingPiece, 0, 0)) { endGame(); return; }
+    }
+  }
+
+  renderAll();
+  gameLoopId = requestAnimationFrame(gameStep);
+}
+
+function startGame() {
+  board = newBoard();
+  score = 0; level = 1; missed = 0; particles = [];
+  otto = { x: W/2, targetX: W/2, munch: 0, phase: 0, lunge: 0 };
+  document.getElementById('score-display').textContent = '0';
+  document.getElementById('level-display').textContent = '1';
+  document.getElementById('missed-display').textContent = '0';
+  fallingPiece = randomPiece();
+  nextPiece = randomPiece();
+  drawNextPreview();
+  running = true;
+  cancelAnimationFrame(gameLoopId);
+  lastDrop = 0;
+  document.getElementById('start-btn').textContent = '↺ Restart';
+  gameLoopId = requestAnimationFrame(gameStep);
+}
+
+function endGame() {
+  running = false;
+  cancelAnimationFrame(gameLoopId);
+  renderAll();
+  ctx.fillStyle = 'rgba(6,16,32,0.88)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd94a';
+  ctx.font = 'bold 30px Segoe UI';
+  ctx.fillText('GAME OVER', W/2, H/2 - 40);
+  ctx.font = '18px Segoe UI';
+  ctx.fillStyle = '#2ad4c0';
+  ctx.fillText('Score: ' + score, W/2, H/2 + 5);
+  ctx.fillStyle = '#a78bfa';
+  ctx.font = '14px Segoe UI';
+  ctx.fillText('Otto is still hungry! 🐙', W/2, H/2 + 38);
+  document.getElementById('start-btn').textContent = '▶ Play Again';
+}
+
+// ─── Controls ─────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (!running || !fallingPiece) return;
+  if (e.key === 'ArrowLeft') {
+    if (isValid(board, fallingPiece, -1, 0)) fallingPiece.x--;
+  } else if (e.key === 'ArrowRight') {
+    if (isValid(board, fallingPiece, 1, 0)) fallingPiece.x++;
+  } else if (e.key === 'ArrowDown') {
+    if (isValid(board, fallingPiece, 0, 1)) { fallingPiece.y++; score++; }
+  } else if (e.key === 'ArrowUp') {
+    const rot = rotate(fallingPiece.shape);
+    if (isValid(board, fallingPiece, 0, 0, rot)) fallingPiece.shape = rot;
+  } else if (e.key === ' ') {
+    e.preventDefault();
+    while (isValid(board, fallingPiece, 0, 1)) { fallingPiece.y++; score += 2; }
+    document.getElementById('score-display').textContent = score;
+  }
+});
+
+document.getElementById('start-btn').addEventListener('click', startGame);
+
+// ─── Idle animation ───────────────────────────────────────────
+otto = { x: W/2, targetX: W/2, munch: 0, phase: 0, lunge: 0 };
+board = newBoard();
+fallingPiece = null;
+
+function idleLoop(ts) {
+  if (running) return;
+  otto.phase += 0.04;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a1628'; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(42,212,192,0.06)'; ctx.lineWidth = 0.5;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      ctx.strokeRect(BOARD_LEFT + c*SZ, BOARD_TOP + r*SZ, SZ, SZ);
+  drawOtto(otto.x, OTTO_Y, 0, otto.phase);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd94a';
+  ctx.font = 'bold 22px Segoe UI';
+  ctx.fillText('Press ▶ Start!', W/2, H/2 - 10);
+  ctx.fillStyle = '#2ad4c0';
+  ctx.font = '13px Segoe UI';
+  ctx.fillText("Otto will chase the popcorn!", W/2, H/2 + 20);
+  requestAnimationFrame(idleLoop);
+}
+requestAnimationFrame(idleLoop);
+</script>
+</body>
+</html>
